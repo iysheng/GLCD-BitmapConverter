@@ -1,6 +1,10 @@
+#!/bin/python
+
 from PIL import Image
 import argparse
 
+gs_raw_filename=''
+gs_include_header = "#include \"GuiLite.h\"\n";
 
 def load_image(filename, target_width, target_height):
     """
@@ -8,7 +12,10 @@ def load_image(filename, target_width, target_height):
     """
 
     image = Image.open(filename, 'r')
-    image = image.resize((target_width, target_height), Image.NEAREST)
+    #print(image.size, "red", target_width, target_height)
+    if (target_width and target_height):
+        image = image.resize((target_width, target_height), Image.NEAREST)
+    # 关键的是这个 image_data
     image_data = image.load()
 
     return image.size[0], image.size[1], image_data
@@ -22,6 +29,7 @@ def get_pixel_intensity(pixel, invert=False, max_value=255):
 
     # Pixel is multi channel
     if type(pixel) is list or type(pixel) is tuple:
+        # 计算平均像素
         for channel_intensity in pixel:
             intensity += channel_intensity
         intensity /= len(pixel)
@@ -54,28 +62,37 @@ def get_average_pixel_intensity(width, height, pixel_data, invert):
     return avg_intensity
 
 
-def output_image_c_array(width, height, pixel_data, crossover, invert):
+def output_image_c_array(width, height, pixel_data, invert):
     """
     Outputs the data in a C bitmap array format.
     """
 
-    print '{'
+    print (gs_include_header)
+    print ('static const unsigned short raw_data[] = {')
 
     for y_idx in range(0, height):
         next_line = ''
         next_value = 0
+        rgb16_value = 0
 
         for x_idx in range(0, width):
-            if (x_idx % 8 == 0 or x_idx == width - 1) and x_idx > 0:
-                next_line += str('0x%0.2X' % next_value).lower() + ","
-                next_value = 0
+            next_value = pixel_data[x_idx, y_idx]
+            rgb16_value = (next_value[0] >> 3 << 11) | (next_value[1] >> 2 << 5) | (next_value[2] >> 3)
+            rgb16_value = 0xffff - rgb16_value
+            #print(next_value, type(next_value), rgb16_value, type(rgb16_value))
+            next_line += str('0x%0.4X' % rgb16_value).lower() + ","
 
-            if get_pixel_intensity(pixel_data[x_idx, y_idx], invert) > crossover:
-                next_value += 2 ** (7 - (x_idx % 8))
+        print (next_line)
 
-        print next_line
-
-    print '};'
+    print ('};')
+    endline = 'extern const BITMAP_INFO ' + gs_raw_filename + ';\n'
+    endline += 'const BITMAP_INFO ' + gs_raw_filename
+    endline += ' = {\n'
+    endline += '    ' + str(width) + ',\n'
+    endline += '    ' + str(height) + ',\n'
+    endline += '    ' + str(2) + ',\n' # 目前仅仅支持 16 bit显示
+    endline += '    (unsigned short *)raw_data,\n};'
+    print(endline)
 
 
 def convert(params):
@@ -83,12 +100,17 @@ def convert(params):
     Runs an image conversion.
     """
 
+    global gs_raw_filename
+    # 获取文件的文件的名字（去除类型后缀）
+    gs_raw_filename = params.image.split('/')[-1].split('.')[0]
     width, height, image_data = load_image(params.image, params.width, params.height)
-    if params.threshold == 0:
-        crossover_intensity = get_average_pixel_intensity(width, height, image_data, params.invert)
-    else:
-        crossover_intensity = params.threshold
-    output_image_c_array(width, height, image_data, crossover_intensity, params.invert)
+
+    #if params.threshold == 0:
+    #    crossover_intensity = get_average_pixel_intensity(width, height, image_data, params.invert)
+    #else:
+    #    crossover_intensity = params.threshold
+    #print(crossover_intensity, "red rgb format")
+    output_image_c_array(width, height, image_data, params.invert)
 
 
 def run():
@@ -110,13 +132,13 @@ def run():
 
     parser.add_argument(
             '--width',
-            default=64,
+            default=0,
             type=int,
             help='Width of the output image')
 
     parser.add_argument(
             '--height',
-            default=128,
+            default=0,
             type=int,
             help='Height of the output image')
 
